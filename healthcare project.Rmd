@@ -1,0 +1,259 @@
+---
+title: "healthcare project_dsa"
+output: html_document
+date: "2024-07-25"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = F, fig.width=8, fig.height=4, 
+                      out.width = "90%", fig.align = "center")
+options(scipen = 0, digits = 3)  # controls base R output
+if(!require('pacman')) {
+  install.packages('pacman')
+}
+pacman::p_load(tree, rpart, randomForest, ranger, rattle, pROC, partykit, glmnet, lda, data.table, stargazer, gridExtra, ggrepe, ggplot2, dplyr, tidyverse, gridExtra, ggrepel, plotly, skimr, contrast, car, mapproj, skimr, usmap, coefplot)
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+data <- read.csv("Training data.csv")
+data
+data1 <- data %>% select(-state)
+data1
+
+valid.2019 <- read.csv("Validation data.csv")
+
+```
+
+```{r}
+
+library(usmap)
+stat.life.plot <- usmap::plot_usmap(regions = "state",                   
+    data = data, 
+    values = "Longevity") + 
+    scale_fill_gradient(
+      low = "white", high = "red", 
+      name = "Life Expectancy in years", 
+      label = scales::comma) + 
+    labs(title = "Longevity in the US 2016-2018", subtitle = "Continental US States") +
+    theme(legend.position = "right")
+stat.life.plot
+
+stat.life1.plot <- usmap::plot_usmap(regions = "state",                   
+    data = valid.2019, 
+    values = "Longevity") + 
+    scale_fill_gradient(
+      low = "white", high = "blue", 
+      name = "Life Expectancy in years", 
+      label = scales::comma) + 
+    labs(title = "Longevity in the US 2019", subtitle = "Continental US States") +
+    theme(legend.position = "right")
+
+```
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r regression, echo=FALSE}
+
+fit1 <- lm(Longevity~., data1)
+summary(fit1)
+
+valid.2019 <- read.csv("Validation data.csv")
+fit1.pred <- predict(fit1, valid.2019)
+
+#make a graph of linear regression
+
+plot(fit1, 1)
+plot(fit1, 2)
+
+```
+
+```{r LASSO}
+set.seed(1)
+library(glmnet)
+Y <- data1[,2]
+X <- data1[, -2]
+fit.fl.lambda <- cv.glmnet(as.matrix(X), Y, alpha=1)
+names(fit.fl.lambda)
+coef.min <- coef(fit.fl.lambda, s="lambda.min")
+coef.min <- coef.min[which(coef.min !=0),] 
+coef.min <- extract.coef(fit.fl.lambda, s="lambda.min")
+
+plot(fit.fl.lambda)
+
+var.min <- rownames(coef.min)[-1]
+var.min
+
+#relaxed lambda.min
+data.fl.sub <- data1[,c("Longevity", var.min)] 
+fit.min.lm <- lm(Longevity~., data=data.fl.sub) # debiased or relaxed LASSO
+summary(fit.min.lm)
+
+```
+```{r backward elimination}
+
+library(leaps)
+library(car)
+fit.min.lm.back1 <- update(fit.min.lm, .~. - Medicare)
+Anova(fit.min.lm.back1)
+
+fit.min.lm.back2 <- update(fit.min.lm.back1, .~. - income)
+Anova(fit.min.lm.back2)
+
+fit.min.lm.back3 <- update(fit.min.lm.back2, .~. - uninsured)
+Anova(fit.min.lm.back3)
+
+final.lm <- fit.min.lm.back3
+
+#model diagnostics
+plot(final.lm, 1)
+plot(final.lm, 2)
+
+valid.2019 <- read.csv("Validation data.csv")
+final.lm.pred <- predict(final.lm, valid.2019)
+```
+
+
+```{r single tree}
+fit0.single <- tree(Longevity~.,data1, 
+                    control=tree.control(nobs=nrow(data1), minsize=5, mindev=.008))
+plot(fit0.single)
+text(fit0.single, digits = 3)
+
+```
+
+
+```{r random forest}
+set.seed(1)
+
+fit.bagging <- randomForest(Longevity~., data1, mtry=12, ntree=500)
+
+# m1 <- mean((predict(fit.bagging.1, data1) - data1$Longevity)^2)
+
+plot(fit.bagging.1, type="p", pch=16,col="blue", main = "testing errors" )
+
+valid.2019 <- read.csv("Validation data.csv")
+rf.pred <- predict(fit.bagging, valid.2019)
+```
+
+```{r logistic}
+
+data1$Longevity_binary <- ifelse(data1$Longevity > mean(data1$Longevity), 1, 0)
+data2 <- data1[,-2]
+fit.logistic <- glm(Longevity_binary~., data2, family=binomial(logit))
+summary(fit.logistic)
+
+Anova(fit.logistic)
+
+```
+
+```{r logistic backward elimination}
+
+fit.logistic.back1 <- update(fit.logistic, .~. - Medicare)
+Anova(fit.logistic.back1)
+
+fit.logistic.back2 <- update(fit.logistic.back1, .~. - Medicaid)
+Anova(fit.logistic.back2)
+
+fit.logistic.back3 <- update(fit.logistic.back2, .~. - uninsured)
+Anova(fit.logistic.back3)
+
+fit.logistic.back4 <- update(fit.logistic.back3, .~. - burden)
+Anova(fit.logistic.back4)
+
+fit.logistic.back5 <- update(fit.logistic.back4, .~. - poverty)
+Anova(fit.logistic.back5)
+
+fit.logistic.back6 <- update(fit.logistic.back5, .~. - gini)
+Anova(fit.logistic.back6)
+
+final.logistic <- fit.logistic.back6 #logistic model after backward selection
+
+```
+
+```{r}
+fit.log.pred <- predict(fit.logistic, valid.2019, type = "response") #forgot to add response as type
+
+#let make them into 01 predictions, we will use the threshold 1/2 because there is no inherent difference between the costlyness of false positives and false negatives
+fit.log.pred <- ifelse(fit.log.pred > 0.5, 1, 0)
+#make into a factor
+fit.log.pred <- as.factor(fit.log.pred)
+
+```
+create outcome in validation
+```{r}
+valid.2019$Longevity_binary <- as.factor(ifelse(valid.2019$Longevity > mean(valid.2019$Longevity), 1, 0))
+```
+
+
+Create confusion matrix
+
+```{r}
+confusion_m <- confusionMatrix(fit.log.pred, valid.2019$Longevity_binary)$table
+```
+
+Make visual of confusion matrix for the presentation, and get precision and recall
+```{r}
+
+# make a df with the values for the cm
+Actual <- factor(c(1, 1, 0, 0), levels = c(1, 0))
+Prediction <- factor(c(0, 1, 0, 1))
+Y <- c(confusion_m[1, 2], confusion_m[2, 2], confusion_m[1, 1], confusion_m[2, 1])
+df <- data.frame(Actual, Prediction, Y)
+
+# Plot the cm
+ggplot(data = df, mapping = aes(x = Actual, y = Prediction)) +
+  geom_tile(aes(fill = Y), colour = "white") +
+  geom_text(aes(label = sprintf("%1.0f", Y)), vjust = 1) +
+  scale_fill_gradient(low = "blue", high = "red") +
+  theme_bw() + theme(legend.position = "none")
+
+#Calculations
+#precision is true positive (upper left corner of ggplot) divided by all predicted positive (true positive + false positive(upper right corner))
+precision <- confusion_m[2,2]/(confusion_m[2,2]+confusion_m[2,1])
+precision
+
+#recall is the true positive divided by all predicted results (true positive + false negative (lower left corner))
+recall <- confusion_m[2,2]/(confusion_m[2,2]+confusion_m[1,2])
+recall
+```
+The results show, we have precision of 1, and a recall of 0.414. This means, thet out of all the observations we classified as being above mean longevity, we were correct 100% of the time. However, out of all the cases that were actually above mean in longlevity, we only cought 41.4% of them. This is not a very good model, as we are missing a lot of the cases that we are trying to predict. We can also calculate the f1 score, which is the harmonic mean of precision and recall. This is a good measure of the overall performance of the model. 
+```{r}
+f1 <- 2*((precision*recall)/(precision+recall))
+f1
+```
+we got an f1 score of 0.585. As precision and recall are equally important to us, we can use the f1 score as a measure of the overall performance of the model. Ideally, we could compare this to a different model, to see if we can get a better performance with a random forest for example. 
+
+
+
+
+
+```{r validation}
+
+valid.2019 <- read.csv("Validation data.csv")
+
+fit1.pred <- predict(fit1, valid.2019) #multiple regression before LASSO and backward elimination
+
+final.lm.pred <- predict(final.lm, valid.2019) #after LASSO and backward elimination
+
+rf.pred <- predict(fit.bagging, valid.2019) #randomForest
+
+fit1.pred.error <- sum((fit1.pred-valid.2019$Longevity)^2)/50
+final.lm.pred.error <- sum((final.lm.pred-valid.2019$Longevity)^2)/50
+rf.pred.error <- sum((rf.pred-valid.2019$Longevity)^2)/50
+
+data.frame(fit1.pred.error, final.lm.pred.error, rf.pred.error)
+
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
